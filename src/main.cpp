@@ -1,14 +1,12 @@
 #include <GigaLearnCPP/Learner.h>
 
 #include <RLGymCPP/Rewards/CommonRewards.h>
-#include <RLGymCPP/Rewards/ZeroSumReward.h>
 #include <RLGymCPP/TerminalConditions/NoTouchCondition.h>
 #include <RLGymCPP/TerminalConditions/GoalScoreCondition.h>
 #include <RLGymCPP/StateSetters/RandomState.h>
 #include <RLGymCPP/ActionParsers/DefaultAction.h>
 
 #include <cstdlib>
-#include <algorithm>
 
 #include "NextoObs.h"
 #include "CarnageRewards.h"
@@ -17,12 +15,10 @@ using namespace GGL; // GigaLearn
 using namespace RLGC; // RLGymCPP
 
 // Carnage v1 - Phase 1 (0 - 5B steps)
-//   Obs:         Nexto/Necto-style flat obs (1v1 = 94 dims, 2v2 = 128 dims)
+//   Obs:         Nexto/Necto-style flat obs, exactly 94 dims (1v1)
 //   Network:     Policy [1024,1024,512,512], Critic [1024,1024,512,512], no shared head
 //   PPO:         3 epochs, ts/itr 50k, batch 50k, minibatch 25k, LR 2e-4, entropy 0.05
 //   Rewards:     Touch(50), SpeedTowardBall(5), FaceBall(1), Air(0.15) - no goal reward
-//   Team modes:  each reward is wrapped in ZeroSumReward (team spirit), sharing reward
-//                with teammates. Start teamSpirit low and increase it as the bot improves.
 //   Terminal:    No touch for 10s, or a goal is scored
 //   State set:   RandomState (random ball/car speed, cars can spawn in the air)
 //   Device:      GPU (CUDA) on Colab T4
@@ -59,14 +55,10 @@ int main(int argc, char* argv[]) {
 	//   positional: collision meshes folder (default: "collision_meshes")
 	//   --device cpu|cuda|auto   (default: cuda)
 	//   --games N                parallel games (default: 256)
-	//   --players-per-team N     1 = 1v1, 2 = 2v2 (default: 1)
-	//   --team-spirit F          reward sharing with teammates, only for team modes (default: 0.1)
 	//   --save-dir <path>        checkpoint folder (default: "checkpoints")
 	std::string meshesPath = "collision_meshes";
 	std::string deviceStr = "cuda";
 	int numGames = 256;
-	int playersPerTeam = 1;
-	float teamSpirit = 0.1f;
 	std::string saveDir = "checkpoints";
 
 	for (int i = 1; i < argc; i++) {
@@ -75,10 +67,6 @@ int main(int argc, char* argv[]) {
 			deviceStr = argv[++i];
 		} else if (arg == "--games" && i + 1 < argc) {
 			numGames = atoi(argv[++i]);
-		} else if (arg == "--players-per-team" && i + 1 < argc) {
-			playersPerTeam = std::max(1, atoi(argv[++i]));
-		} else if (arg == "--team-spirit" && i + 1 < argc) {
-			teamSpirit = (float)atof(argv[++i]);
 		} else if (arg == "--save-dir" && i + 1 < argc) {
 			saveDir = argv[++i];
 		} else {
@@ -86,42 +74,27 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
-	// Team spirit (ZeroSumReward) is only used in team modes
-	bool useTeamSpirit = playersPerTeam >= 2;
-
 	// Initialize RocketSim with collision meshes
 	RocketSim::Init(meshesPath);
 
 	// Create the RLGymCPP environment for each of our games
-	auto EnvCreateFunc = [playersPerTeam, useTeamSpirit, teamSpirit](int index) -> EnvCreateResult {
-		std::vector<WeightedReward> rewards;
-
-		// In team modes, wrap every reward in ZeroSumReward so teammates share it
-		// (guide's team spirit): own*(1-ts) + avgTeam*ts - avgOpponent
-		auto addReward = [&](Reward* reward, float weight) {
-			if (useTeamSpirit) {
-				rewards.push_back(WeightedReward(new ZeroSumReward(reward, teamSpirit), weight));
-			} else {
-				rewards.push_back(WeightedReward(reward, weight));
-			}
+	auto EnvCreateFunc = [](int index) -> EnvCreateResult {
+		std::vector<WeightedReward> rewards = {
+			WeightedReward(new TouchBallReward(), 50),
+			WeightedReward(new SpeedTowardBallReward(), 5),
+			WeightedReward(new FaceBallReward(), 1),
+			WeightedReward(new AirReward(), 0.15f)
 		};
-
-		addReward(new TouchBallReward(), 50);
-		addReward(new SpeedTowardBallReward(), 5);
-		addReward(new FaceBallReward(), 1);
-		addReward(new AirReward(), 0.15f);
 
 		std::vector<TerminalCondition*> terminalConditions = {
 			new NoTouchCondition(10), // 10s without touching the ball ends the episode
 			new GoalScoreCondition()  // A goal ends the episode (but gives no reward)
 		};
 
-		// Make the arena
+		// 1v1 arena
 		auto arena = Arena::Create(GameMode::SOCCAR);
-		for (int i = 0; i < playersPerTeam; i++) {
-			arena->AddCar(Team::BLUE);
-			arena->AddCar(Team::ORANGE);
-		}
+		arena->AddCar(Team::BLUE);
+		arena->AddCar(Team::ORANGE);
 
 		EnvCreateResult result = {};
 		result.actionParser = new DefaultAction();

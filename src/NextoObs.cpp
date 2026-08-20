@@ -9,7 +9,7 @@ namespace RLGC {
 	constexpr float ANG_VEL_COEF = 1 / 3.f;
 
 	namespace {
-		// Full player block (Self / Teammates): phys(15) + boost/onGround/hasFlip/isDemoed(4)
+		// Self block: phys(15) + boost/onGround/hasFlip/isDemoed(4)
 		void AddPlayerFrame(FList& obs, const Player& player, const PhysState& phys) {
 			obs += phys.pos * POS_COEF;
 			obs += phys.rotMat.forward;
@@ -22,7 +22,7 @@ namespace RLGC {
 			obs += player.isDemoed;
 		}
 
-		// Opponent block: position + forward/up orientation + velocities only
+		// Opponent block (1v1: exactly one): position + forward/up orientation + velocities only
 		void AddOpponentFrame(FList& obs, const PhysState& phys) {
 			obs += phys.pos * POS_COEF;
 			obs += phys.rotMat.forward;
@@ -34,13 +34,7 @@ namespace RLGC {
 
 	FList NextoObs::BuildObs(const Player& player, const GameState& state) {
 		FList obs = {};
-
-		// Teams may be any size (1v1, 2v2, ...). Reserve the exact expected size.
-		int playersPerTeam = 1;
-		for (auto& otherPlayer : state.players)
-			if (otherPlayer.team == player.team)
-				playersPerTeam++;
-		obs.reserve(ExpectedDim(playersPerTeam));
+		obs.reserve(OBS_DIM);
 
 		// Invert into the orange-player frame so both teams see the same view
 		const bool inv = player.team == Team::ORANGE;
@@ -72,31 +66,24 @@ namespace RLGC {
 		// Self (19)
 		AddPlayerFrame(obs, player, InvertPhys(player, inv));
 
-		// Teammates (19 each) then opponents (15 each)
-		FList teammates = {}, opponents = {};
+		// Opponent (15): 1v1 fixed layout, self+opponents only (no teammates)
+		FList opponents = {};
 		for (auto& otherPlayer : state.players) {
 			if (otherPlayer.carId == player.carId)
 				continue;
-
-			const auto otherPhys = InvertPhys(otherPlayer, inv);
-			if (otherPlayer.team == player.team) {
-				AddPlayerFrame(teammates, otherPlayer, otherPhys);
-			} else {
-				AddOpponentFrame(opponents, otherPhys);
-			}
+			if (otherPlayer.team != player.team)
+				AddOpponentFrame(opponents, InvertPhys(otherPlayer, inv));
 		}
-
-		obs += teammates;
 		obs += opponents;
 
-		// Runtime verification: the exact block sizes must match for this team size
-		RG_ASSERT(obs.size() == ExpectedDim(playersPerTeam));
+		// Runtime verification: the concatenated blocks must sum to exactly 94
+		RG_ASSERT(obs.size() == OBS_DIM);
 
 		static std::once_flag printFlag;
-		std::call_once(printFlag, [](size_t dim) {
-			printf("Observation size: %zu\n", dim);
+		std::call_once(printFlag, [] {
+			printf("Observation size: %zu\n", static_cast<size_t>(OBS_DIM));
 			fflush(stdout);
-		}, obs.size());
+		});
 
 		return obs;
 	}
