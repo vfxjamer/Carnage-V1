@@ -172,8 +172,9 @@ int main(int argc, char* argv[]) {
 	cfg.ppo.policy.addLayerNorm = true;
 	cfg.ppo.critic.addLayerNorm = true;
 
-	// Save a checkpoint each iteration (every 50k steps)
-	cfg.tsPerSave = 0;
+	// Save a checkpoint every 5M timesteps (5_000_000) into --save-dir.
+	// Old checkpoints are pruned by checkpointsToKeep (default 8).
+	cfg.tsPerSave = 5'000'000;
 
 	// wandb metrics (opt-in via --wandb). All Report metrics are sent every
 	// iteration: Player/* step metrics, Rewards/* per-reward curves, Game/* events.
