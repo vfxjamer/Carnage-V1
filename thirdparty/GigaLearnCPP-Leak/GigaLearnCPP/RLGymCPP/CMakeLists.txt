@@ -10,6 +10,7 @@ target_include_directories(RLGymCPP PUBLIC "src/")
 # Set C++ version to 20
 set_target_properties(RLGymCPP PROPERTIES LINKER_LANGUAGE CXX)
 set_target_properties(RLGymCPP PROPERTIES CXX_STANDARD 20)
+set_target_properties(RLGymCPP PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Include RocketSim
 add_subdirectory("RocketSim")
