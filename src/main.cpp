@@ -19,6 +19,8 @@ using namespace RLGC; // RLGymCPP
 //   Network:     Policy [1024,1024,512,512], Critic [1024,1024,512,512], no shared head
 //   PPO:         3 epochs, ts/itr 50k, batch 50k, minibatch 25k, LR 2e-4, entropy 0.05
 //   Rewards:     Touch(50), SpeedTowardBall(5), FaceBall(1), Air(0.15) - no goal reward
+//   Metrics:     optional wandb via --wandb <project> (logs the full Report every iteration:
+//                Player/* step metrics, Rewards/* per-reward curves, Game/* events)
 //   Terminal:    No touch for 10s, or a goal is scored
 //   State set:   RandomState (random ball/car speed, cars can spawn in the air)
 //   Device:      GPU (CUDA) on Colab T4
@@ -28,6 +30,11 @@ void StepCallback(Learner* learner, const std::vector<GameState>& states, Report
 	bool doExpensiveMetrics = (rand() % 4) == 0;
 
 	for (auto& state : states) {
+		if (state.goalScored) {
+			report.AddAvg("Game/Goal Scored", 1.f);
+			report.AddAvg("Game/Goal Speed", state.ball.vel.Length());
+		}
+
 		if (doExpensiveMetrics) {
 			for (auto& player : state.players) {
 				report.AddAvg("Player/In Air Ratio", !player.isOnGround);
@@ -44,9 +51,6 @@ void StepCallback(Learner* learner, const std::vector<GameState>& states, Report
 					report.AddAvg("Player/Touch Height", state.ball.pos.z);
 			}
 		}
-
-		if (state.goalScored)
-			report.AddAvg("Game/Goal Speed", state.ball.vel.Length());
 	}
 }
 
@@ -56,10 +60,14 @@ int main(int argc, char* argv[]) {
 	//   --device cpu|cuda|auto   (default: cuda)
 	//   --games N                parallel games (default: 256)
 	//   --save-dir <path>        checkpoint folder (default: "checkpoints")
+	//   --wandb <project>        enable wandb metrics (project name). Run/group/run-id
+	//                            come from env: CARNAGE_WANDB_GROUP, CARNAGE_WANDB_RUN,
+	//                            CARNAGE_WANDB_RUN_ID. WANDB_API_KEY must be set in env.
 	std::string meshesPath = "collision_meshes";
 	std::string deviceStr = "cuda";
 	int numGames = 256;
 	std::string saveDir = "checkpoints";
+	std::string wandbProject = "";
 
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -69,6 +77,8 @@ int main(int argc, char* argv[]) {
 			numGames = atoi(argv[++i]);
 		} else if (arg == "--save-dir" && i + 1 < argc) {
 			saveDir = argv[++i];
+		} else if (arg == "--wandb" && i + 1 < argc) {
+			wandbProject = argv[++i];
 		} else {
 			meshesPath = arg;
 		}
@@ -165,7 +175,22 @@ int main(int argc, char* argv[]) {
 	// Save a checkpoint each iteration (every 50k steps)
 	cfg.tsPerSave = 0;
 
-	cfg.sendMetrics = false; // No metric receiver running (console metrics still print)
+	// wandb metrics (opt-in via --wandb). All Report metrics are sent every
+	// iteration: Player/* step metrics, Rewards/* per-reward curves, Game/* events.
+	// Resuming a run happens automatically: the reframe restores the previous
+	// run ID from stats.json and wandb's resume="allow" continues that run.
+	if (!wandbProject.empty()) {
+		const char* group = getenv("CARNAGE_WANDB_GROUP");
+		const char* run = getenv("CARNAGE_WANDB_RUN");
+
+		cfg.sendMetrics = true;
+		cfg.metricsProjectName = wandbProject;
+		cfg.metricsGroupName = group ? group : "Phase 1";
+		cfg.metricsRunName = run ? run : "carnage-v1";
+	}
+	else {
+		cfg.sendMetrics = false; // No metric receiver running (console metrics still print)
+	}
 
 	// Make the learner with the environment creation function and the config we just made
 	Learner* learner = new Learner(EnvCreateFunc, cfg, StepCallback);
