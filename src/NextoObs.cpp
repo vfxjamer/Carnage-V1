@@ -9,7 +9,20 @@ namespace RLGC {
 	constexpr float ANG_VEL_COEF = 1 / 3.f;
 
 	namespace {
-		// Opponent block only: position + forward/up orientation + velocities
+		// Full player block (Self / Teammates): phys(15) + boost/onGround/hasFlip/isDemoed(4)
+		void AddPlayerFrame(FList& obs, const Player& player, const PhysState& phys) {
+			obs += phys.pos * POS_COEF;
+			obs += phys.rotMat.forward;
+			obs += phys.rotMat.up;
+			obs += phys.vel * VEL_COEF;
+			obs += phys.angVel * ANG_VEL_COEF;
+			obs += player.boost / 100;
+			obs += player.isOnGround;
+			obs += player.HasFlipOrJump();
+			obs += player.isDemoed;
+		}
+
+		// Opponent block: position + forward/up orientation + velocities only
 		void AddOpponentFrame(FList& obs, const PhysState& phys) {
 			obs += phys.pos * POS_COEF;
 			obs += phys.rotMat.forward;
@@ -21,7 +34,13 @@ namespace RLGC {
 
 	FList NextoObs::BuildObs(const Player& player, const GameState& state) {
 		FList obs = {};
-		obs.reserve(OBS_DIM);
+
+		// Teams may be any size (1v1, 2v2, ...). Reserve the exact expected size.
+		int playersPerTeam = 1;
+		for (auto& otherPlayer : state.players)
+			if (otherPlayer.team == player.team)
+				playersPerTeam++;
+		obs.reserve(ExpectedDim(playersPerTeam));
 
 		// Invert into the orange-player frame so both teams see the same view
 		const bool inv = player.team == Team::ORANGE;
@@ -50,33 +69,34 @@ namespace RLGC {
 			}
 		}
 
-		// Self (19): phys(15) + boost/onGround/hasFlip/isDemoed(4)
-		const auto selfPhys = InvertPhys(player, inv);
-		obs += selfPhys.pos * POS_COEF;
-		obs += selfPhys.rotMat.forward;
-		obs += selfPhys.rotMat.up;
-		obs += selfPhys.vel * VEL_COEF;
-		obs += selfPhys.angVel * ANG_VEL_COEF;
-		obs += player.boost / 100;
-		obs += player.isOnGround;
-		obs += player.HasFlipOrJump();
-		obs += player.isDemoed;
+		// Self (19)
+		AddPlayerFrame(obs, player, InvertPhys(player, inv));
 
-		// Opponent (15): phys only
+		// Teammates (19 each) then opponents (15 each)
+		FList teammates = {}, opponents = {};
 		for (auto& otherPlayer : state.players) {
-			if (otherPlayer.carId == player.carId || otherPlayer.team == player.team)
+			if (otherPlayer.carId == player.carId)
 				continue;
-			AddOpponentFrame(obs, InvertPhys(otherPlayer, inv));
+
+			const auto otherPhys = InvertPhys(otherPlayer, inv);
+			if (otherPlayer.team == player.team) {
+				AddPlayerFrame(teammates, otherPlayer, otherPhys);
+			} else {
+				AddOpponentFrame(opponents, otherPhys);
+			}
 		}
 
-		// Runtime verification: 1v1 must produce exactly 94 floats
-		RG_ASSERT(obs.size() == OBS_DIM);
+		obs += teammates;
+		obs += opponents;
+
+		// Runtime verification: the exact block sizes must match for this team size
+		RG_ASSERT(obs.size() == ExpectedDim(playersPerTeam));
 
 		static std::once_flag printFlag;
-		std::call_once(printFlag, [] {
-			printf("Observation size: %d\n", OBS_DIM);
+		std::call_once(printFlag, [](size_t dim) {
+			printf("Observation size: %zu\n", dim);
 			fflush(stdout);
-		});
+		}, obs.size());
 
 		return obs;
 	}
