@@ -1,0 +1,10 @@
+build/
+.vs/
+out/
+bin/
+*.log
+checkpoints/
+__pycache__/
+*.user
+.Rhistory
+.ipynb_checkpoints/
