@@ -3,6 +3,13 @@ import sys
 import json
 import os
 
+# Keep wandb quiet + non-interactive: no TTY prompt rendering, no progress bar
+# spamming stderr with tcsetattr errors when stdout is not a TTY.
+os.environ.setdefault("WANDB_CONSOLE", "off")
+os.environ.setdefault("WANDB_SILENT", "true")
+os.environ.setdefault("WANDB_MODE", "online")
+os.environ.setdefault("WANDB_PROGRAM", "carnage")
+
 wandb_run = None
 
 # Takes in the python executable path, the three wandb init strings, and optionally the current run ID
@@ -36,4 +43,9 @@ def init(py_exec_path, project, group, name, id = None):
 
 def add_metrics(metrics):
 	global wandb_run
-	wandb_run.log(metrics)
+	if wandb_run is None:
+		return
+	try:
+		wandb_run.log(metrics)
+	except Exception as e:
+		print(f"[metric_receiver] wandb.log failed (ignored): {e!r}")
