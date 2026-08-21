@@ -1,9 +1,6 @@
 #include <GigaLearnCPP/Learner.h>
 
 #include <RLGymCPP/Rewards/CommonRewards.h>
-#include <RLGymCPP/Rewards/VelocityBallToGoalReward.h>
-#include <RLGymCPP/Rewards/EventReward.h>
-#include <RLGymCPP/Rewards/BoostPickupReward.h>
 #include <RLGymCPP/TerminalConditions/NoTouchCondition.h>
 #include <RLGymCPP/TerminalConditions/GoalScoreCondition.h>
 #include <RLGymCPP/ActionParsers/DefaultAction.h>
@@ -22,7 +19,7 @@ using namespace RLGC; // RLGymCPP
 //   Obs:         Nexto/Necto-style flat obs, exactly 94 dims (1v1)
 //   Network:     Policy [1024,1024,512,512], Critic [1024,1024,512,512], no shared head
 //   PPO:         3 epochs, ts/itr 50k, batch 50k, minibatch 25k, LR 2e-4, entropy 0.05
-//   Rewards:     VelocityBallToGoal(8), EventReward(goal=20), TouchBall(5), SpeedTowardBall(3), FaceBall(1), Air(0.15), BoostPickup(0.5), TotalEnergy(0.55)
+//   Rewards:     VelocityBallToGoal(8), GoalReward(concede=-1, weight=20), TouchBall(5), SpeedTowardBall(3), FaceBall(1), Air(0.15), PickupBoost(0.5), TotalEnergy(0.55)
 //   Metrics:     optional wandb via --wandb <project> (logs the full Report every iteration:
 //                Player/* step metrics, Rewards/* per-reward curves, Game/* events)
 //   Terminal:    No touch for 10s, or a goal is scored
@@ -115,12 +112,12 @@ int main(int argc, char* argv[]) {
 	auto EnvCreateFunc = [replayPath, replayProbability](int index) -> EnvCreateResult {
 		std::vector<WeightedReward> rewards = {
 			WeightedReward(new VelocityBallToGoalReward(), 8.0f),
-			WeightedReward(new EventReward(1.0f, -1.0f), 20.0f),
+			WeightedReward(new GoalReward(-1.0f), 20.0f),
 			WeightedReward(new TouchBallReward(), 5.0f),
 			WeightedReward(new SpeedTowardBallReward(), 3.0f),
 			WeightedReward(new FaceBallReward(), 1.0f),
 			WeightedReward(new AirReward(), 0.15f),
-			WeightedReward(new BoostPickupReward(), 0.5f),
+			WeightedReward(new PickupBoostReward(), 0.5f),
 			WeightedReward(new TotalEnergyReward(), 0.55f)
 		};
 
