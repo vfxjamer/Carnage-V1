@@ -64,10 +64,12 @@ int main(int argc, char* argv[]) {
 	//                            come from env: CARNAGE_WANDB_GROUP, CARNAGE_WANDB_RUN,
 	//                            CARNAGE_WANDB_RUN_ID. WANDB_API_KEY must be set in env.
 	std::string meshesPath = "collision_meshes";
-	std::string deviceStr = "cuda";
+	std::string deviceStr = "cpu";
 	int numGames = 256;
 	std::string saveDir = "checkpoints";
 	std::string wandbProject = "";
+	bool renderMode = false;
+	float renderTimeScale = 1.0f;
 
 	for (int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
@@ -79,6 +81,10 @@ int main(int argc, char* argv[]) {
 			saveDir = argv[++i];
 		} else if (arg == "--wandb" && i + 1 < argc) {
 			wandbProject = argv[++i];
+		} else if (arg == "--render") {
+			renderMode = true;
+		} else if (arg == "--render-timescale" && i + 1 < argc) {
+			renderTimeScale = (float)atof(argv[++i]);
 		} else {
 			meshesPath = arg;
 		}
@@ -192,6 +198,9 @@ int main(int argc, char* argv[]) {
 	else {
 		cfg.sendMetrics = false; // No metric receiver running (console metrics still print)
 	}
+
+	cfg.renderMode = renderMode;
+	cfg.renderTimeScale = renderTimeScale;
 
 	// Make the learner with the environment creation function and the config we just made
 	Learner* learner = new Learner(EnvCreateFunc, cfg, StepCallback);
