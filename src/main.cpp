@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
 	//                            CARNAGE_WANDB_RUN_ID. WANDB_API_KEY must be set in env.
 	std::string meshesPath = "collision_meshes";
 	std::string deviceStr = "cpu";
-	int numGames = 256;
+	int numGames = 1024;
 	std::string saveDir = "checkpoints";
 	std::string wandbProject = "";
 	bool renderMode = false;
