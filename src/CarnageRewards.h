@@ -1,5 +1,6 @@
 #pragma once
 #include <RLGymCPP/Rewards/CommonRewards.h>
+#include <RLGymCPP/CommonValues.h>
 
 // speed_toward_ball from the RLGym-PPO guide's early-stage reward stack:
 // the speed at which the car is moving towards the ball, normalized by
@@ -20,14 +21,17 @@ namespace RLGC {
 		virtual float GetReward(const Player& player, const GameState& state, bool isFinal) override {
 			if (player.isDemoed) return 0.0f;
 
-			constexpr float MASS = CommonValues::CAR_MASS;
-			constexpr float GRAVITY = CommonValues::GRAVITY_Z;
+			// Constants matching your Python logic exactly
+			constexpr float MASS = 180.0f;  // CAR_MASS_BT from RocketSim RLConst
+			constexpr float GRAVITY = 650.0f;  // Absolute value (your code uses positive)
 			constexpr float CEILING_Z = CommonValues::CEILING_Z;
 			constexpr float CAR_MAX_SPEED = CommonValues::CAR_MAX_SPEED;
 			constexpr float JUMP_IMPULSE = 292.0f;
 			constexpr float BOOST_ENERGY_PER_100 = 7.87e5f;
 
 			// Max theoretical energy (ceiling height + supersonic + full boost + jump + flip)
+			// max_energy = (MASS * GRAVITY * (CEILING_Z - 17)) + (0.5 * MASS * (CAR_MAX_SPEED^2)) 
+			//            + (BOOST_ENERGY_PER_100 * 100) + (0.8 * 0.5 * MASS * JUMP_IMPULSE^2) + (0.9 * 0.5 * MASS * 600^2)
 			const float max_energy = (MASS * GRAVITY * (CEILING_Z - 17.0f))
 			                       + (0.5f * MASS * (CAR_MAX_SPEED * CAR_MAX_SPEED))
 			                       + (BOOST_ENERGY_PER_100 * 100.0f)
@@ -46,13 +50,13 @@ namespace RLGC {
 			// Boost energy (7.87e5 per 100 boost)
 			energy += BOOST_ENERGY_PER_100 * player.boost * 100.0f;
 
-			// Jump energy
-			if (player.hasJump) {
+			// Jump energy (hasJumped in RocketSim)
+			if (player.hasJumped) {
 				energy += 0.8f * 0.5f * MASS * (JUMP_IMPULSE * JUMP_IMPULSE);
 			}
 
-			// Flip/dodge energy
-			if (player.hasFlip) {
+			// Flip/dodge energy (hasFlipped in RocketSim)
+			if (player.hasFlipped) {
 				float dodge_impulse = (velocity <= 1700.0f)
 					? 500.0f + (velocity / 17.0f)
 					: 600.0f - (velocity - 1700.0f);
