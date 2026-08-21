@@ -1,6 +1,9 @@
 #include <GigaLearnCPP/Learner.h>
 
 #include <RLGymCPP/Rewards/CommonRewards.h>
+#include <RLGymCPP/Rewards/VelocityBallToGoalReward.h>
+#include <RLGymCPP/Rewards/EventReward.h>
+#include <RLGymCPP/Rewards/BoostPickupReward.h>
 #include <RLGymCPP/TerminalConditions/NoTouchCondition.h>
 #include <RLGymCPP/TerminalConditions/GoalScoreCondition.h>
 #include <RLGymCPP/ActionParsers/DefaultAction.h>
@@ -15,11 +18,11 @@
 using namespace GGL; // GigaLearn
 using namespace RLGC; // RLGymCPP
 
-// Carnage v1 - Phase 1 (0 - 5B steps)
+// Carnage v1 - Phase 2 (Learning to Score)
 //   Obs:         Nexto/Necto-style flat obs, exactly 94 dims (1v1)
 //   Network:     Policy [1024,1024,512,512], Critic [1024,1024,512,512], no shared head
 //   PPO:         3 epochs, ts/itr 50k, batch 50k, minibatch 25k, LR 2e-4, entropy 0.05
-//   Rewards:     Touch(50), SpeedTowardBall(5), FaceBall(1), Air(0.15) - no goal reward
+//   Rewards:     VelocityBallToGoal(8), EventReward(goal=20), TouchBall(5), SpeedTowardBall(3), FaceBall(1), Air(0.15), BoostPickup(0.5), TotalEnergy(0.55)
 //   Metrics:     optional wandb via --wandb <project> (logs the full Report every iteration:
 //                Player/* step metrics, Rewards/* per-reward curves, Game/* events)
 //   Terminal:    No touch for 10s, or a goal is scored
@@ -111,10 +114,14 @@ int main(int argc, char* argv[]) {
 	// Create the RLGymCPP environment for each of our games
 	auto EnvCreateFunc = [replayPath, replayProbability](int index) -> EnvCreateResult {
 		std::vector<WeightedReward> rewards = {
-			WeightedReward(new TouchBallReward(), 50),
-			WeightedReward(new SpeedTowardBallReward(), 5),
-			WeightedReward(new FaceBallReward(), 1),
-			WeightedReward(new AirReward(), 0.15f)
+			WeightedReward(new VelocityBallToGoalReward(), 8.0f),
+			WeightedReward(new EventReward(1.0f, -1.0f), 20.0f),
+			WeightedReward(new TouchBallReward(), 5.0f),
+			WeightedReward(new SpeedTowardBallReward(), 3.0f),
+			WeightedReward(new FaceBallReward(), 1.0f),
+			WeightedReward(new AirReward(), 0.15f),
+			WeightedReward(new BoostPickupReward(), 0.5f),
+			WeightedReward(new TotalEnergyReward(), 0.55f)
 		};
 
 		std::vector<TerminalCondition*> terminalConditions = {
@@ -207,7 +214,7 @@ int main(int argc, char* argv[]) {
 
 		cfg.sendMetrics = true;
 		cfg.metricsProjectName = wandbProject;
-		cfg.metricsGroupName = group ? group : "Phase 1";
+		cfg.metricsGroupName = group ? group : "Phase 2";
 		cfg.metricsRunName = run ? run : "carnage-v1";
 	}
 	else {
