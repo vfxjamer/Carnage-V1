@@ -4,9 +4,9 @@
 #include <RLGymCPP/Math.h>
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <random>
 
 using RocketSim::Math::RandFloat;
@@ -19,12 +19,6 @@ namespace {
     std::mt19937& ReplayRng() {
         static thread_local std::mt19937 rng(std::random_device{}());
         return rng;
-    }
-
-    uint64_t ReadU64(std::ifstream& file) {
-        uint64_t value = 0;
-        file.read(reinterpret_cast<char*>(&value), sizeof(value));
-        return value;
     }
 }
 
@@ -57,12 +51,11 @@ bool ReplayStateSetter::_LoadReplays(const std::string& path) {
         return false;
     }
 
-    // Each frame is fixed-width in the existing serializer:
-    // 3 Vecs + 4*2 Vecs + 2 floats + 2 bytes + 2 ints.
+    // Existing serialized_replays.bin format:
+    // 11 Vecs + 2 floats + 2 one-byte bools + 2 ints per frame.
     constexpr size_t BYTES_PER_VEC = sizeof(float) * 3;
     constexpr size_t BYTES_PER_FRAME =
-        3 * BYTES_PER_VEC +
-        2 * 4 * BYTES_PER_VEC +
+        11 * BYTES_PER_VEC +
         2 * sizeof(float) +
         2 +
         2 * sizeof(int);
@@ -132,8 +125,7 @@ bool ReplayStateSetter::_LoadReplays(const std::string& path) {
             return false;
         }
 
-        // Defensive validation. A corrupt frame should never be injected into
-        // RocketSim because NaNs/inf values can poison an entire worker.
+        // Never inject NaN/Inf into RocketSim.
         const Vec* vecs[] = {
             &f.ballPos, &f.ballVel, &f.ballAngVel,
             &f.carPos[0], &f.carPos[1],
