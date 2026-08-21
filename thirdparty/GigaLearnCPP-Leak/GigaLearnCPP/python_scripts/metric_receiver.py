@@ -3,6 +3,14 @@ import sys
 import json
 import os
 
+# NumPy 2.0 compat: wandb 0.16.6 uses np.float_/np.complex_ (removed in NumPy 2).
+# This alias must be set BEFORE any wandb import (including in spawned service processes).
+import numpy as _np
+if not hasattr(_np, "float_"):
+    _np.float_ = _np.float64
+if not hasattr(_np, "complex_"):
+    _np.complex_ = _np.complex128
+
 # Keep wandb quiet + non-interactive: no TTY prompt rendering, no progress bar
 # spamming stderr with tcsetattr errors when stdout is not a TTY.
 os.environ.setdefault("WANDB_CONSOLE", "off")
