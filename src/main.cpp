@@ -3,13 +3,14 @@
 #include <RLGymCPP/Rewards/CommonRewards.h>
 #include <RLGymCPP/TerminalConditions/NoTouchCondition.h>
 #include <RLGymCPP/TerminalConditions/GoalScoreCondition.h>
-#include <RLGymCPP/StateSetters/RandomState.h>
 #include <RLGymCPP/ActionParsers/DefaultAction.h>
 
 #include <cstdlib>
+#include <iostream>
 
 #include "NextoObs.h"
 #include "CarnageRewards.h"
+#include "ReplayStateSetter.h"
 
 using namespace GGL; // GigaLearn
 using namespace RLGC; // RLGymCPP
@@ -22,8 +23,8 @@ using namespace RLGC; // RLGymCPP
 //   Metrics:     optional wandb via --wandb <project> (logs the full Report every iteration:
 //                Player/* step metrics, Rewards/* per-reward curves, Game/* events)
 //   Terminal:    No touch for 10s, or a goal is scored
-//   State set:   RandomState (random ball/car speed, cars can spawn in the air)
-//   Device:      GPU (CUDA) on Colab T4
+//   State set:   ReplayStateSetter: 30% real replay frames + 70% RandomState fallback
+//                Replay file: serialized_replays.bin (override with --replay-path)
 
 void StepCallback(Learner* learner, const std::vector<GameState>& states, Report& report) {
 	// To prevent expensive metrics from eating at performance, we will only run them on 1/4th of steps
@@ -60,6 +61,8 @@ int main(int argc, char* argv[]) {
 	//   --device cpu|cuda|auto   (default: cuda)
 	//   --games N                parallel games (default: 256)
 	//   --save-dir <path>        checkpoint folder (default: "checkpoints")
+	//   --replay-path <path>     serialized replay dataset (default: "serialized_replays.bin")
+	//   --replay-prob P          probability of starting from a replay frame (default: 0.30)
 	//   --wandb <project>        enable wandb metrics (project name). Run/group/run-id
 	//                            come from env: CARNAGE_WANDB_GROUP, CARNAGE_WANDB_RUN,
 	//                            CARNAGE_WANDB_RUN_ID. WANDB_API_KEY must be set in env.
@@ -67,6 +70,8 @@ int main(int argc, char* argv[]) {
 	std::string deviceStr = "cpu";
 	int numGames = 1024;
 	std::string saveDir = "checkpoints";
+	std::string replayPath = "serialized_replays.bin";
+	float replayProbability = 0.30f;
 	std::string wandbProject = "";
 	bool renderMode = false;
 	float renderTimeScale = 1.0f;
@@ -79,6 +84,10 @@ int main(int argc, char* argv[]) {
 			numGames = atoi(argv[++i]);
 		} else if (arg == "--save-dir" && i + 1 < argc) {
 			saveDir = argv[++i];
+		} else if (arg == "--replay-path" && i + 1 < argc) {
+			replayPath = argv[++i];
+		} else if (arg == "--replay-prob" && i + 1 < argc) {
+			replayProbability = static_cast<float>(atof(argv[++i]));
 		} else if (arg == "--wandb" && i + 1 < argc) {
 			wandbProject = argv[++i];
 		} else if (arg == "--render") {
@@ -90,11 +99,17 @@ int main(int argc, char* argv[]) {
 		}
 	}
 
+	if (replayProbability < 0.f || replayProbability > 1.f) {
+		std::cerr << "Invalid --replay-prob " << replayProbability
+		          << "; expected a value in [0, 1].\n";
+		return EXIT_FAILURE;
+	}
+
 	// Initialize RocketSim with collision meshes
 	RocketSim::Init(meshesPath);
 
 	// Create the RLGymCPP environment for each of our games
-	auto EnvCreateFunc = [](int index) -> EnvCreateResult {
+	auto EnvCreateFunc = [replayPath, replayProbability](int index) -> EnvCreateResult {
 		std::vector<WeightedReward> rewards = {
 			WeightedReward(new TouchBallReward(), 50),
 			WeightedReward(new SpeedTowardBallReward(), 5),
@@ -115,7 +130,7 @@ int main(int argc, char* argv[]) {
 		EnvCreateResult result = {};
 		result.actionParser = new DefaultAction();
 		result.obsBuilder = new NextoObs();
-		result.stateSetter = new RandomState(true, true, false);
+		result.stateSetter = new ReplayStateSetter(replayPath, replayProbability);
 		result.terminalConditions = terminalConditions;
 		result.rewards = rewards;
 
