@@ -36,9 +36,9 @@ using namespace RLGC;  // RLGymCPP
 // Rewards:
 //   VelocityBallToGoal  = 7.0
 //   GoalReward          = 60.0
-//   TouchBall           = 5.0
-//   TouchAcceleration   = 1.5
-//   TouchHeight         = 1.0
+//   TouchQuality        = 5.0
+//     - internal quality ratio: 5 : 1.5 : 1
+//     - impact : speed-change : height
 //   SpeedTowardBall     = 5.0
 //   FaceBall            = 1.5
 //   Air                 = 0.16
@@ -318,30 +318,14 @@ int main(
             // Ball interaction
             // ------------------------------------------------
 
-            // Small flat touch reward.
+            // Continuous touch-quality reward.
             //
-            // This is intentionally low because TouchBallReward
-            // can be repeatedly obtained during ball control.
+            // No flat +5 for merely touching. The returned value
+            // scales with the quality of the actual ball impact.
+            // The internal impact:speed-change:height ratio is
+            // preserved at 5:1.5:1.
             WeightedReward(
-                new TouchBallReward(),
-                5.0f
-            ),
-
-            // Rewards useful changes in ball velocity.
-            //
-            // This is intended to make the bot value the
-            // QUALITY of a touch rather than merely touching.
-            WeightedReward(
-                new TouchAccelerationReward(),
-                1.5f
-            ),
-
-            // Small touch-height signal.
-            //
-            // Kept low so aerial control is encouraged without
-            // making high/roof touches an easy farming strategy.
-            WeightedReward(
-                new TouchHeightReward(),
+                new TouchQualityReward(),
                 1.0f
             ),
 
