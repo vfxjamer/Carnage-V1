@@ -23,7 +23,6 @@ namespace RLGC {
 			Vec posDiff = state.ball.pos - player.pos;
 			float distToBall = posDiff.Length();
 
-			// Avoid normalizing a zero-length vector.
 			if (distToBall <= 0.001f)
 				return 0.0f;
 
@@ -42,21 +41,27 @@ namespace RLGC {
 	// Touch Quality Reward
 	// ============================================================
 	//
-	// Replaces the old binary TouchBallReward.
+	// Replaces the old binary TouchBallReward + separate touch
+	// acceleration/height signals with ONE continuous touch-quality
+	// signal.
 	//
-	// A touch is no longer worth a flat 1.0. Instead, its reward is
-	// proportional to how much the touch actually changes the
-	// ball's velocity.
+	// A touch is scored using three properties:
 	//
-	// 0.00 -> negligible touch / no meaningful ball impact
-	// 0.25 -> light touch
-	// 0.50 -> moderate touch
-	// 0.75 -> strong touch
-	// 1.00 -> maximum-quality impact
+	//   1. Impact       - how much the ball velocity vector changed
+	//   2. Speed change - how much the ball's scalar speed changed
+	//   3. Height       - aerial/high-ball touch quality
 	//
-	// Direction is intentionally NOT evaluated here. Goal/ZeroSum
-	// rewards are responsible for determining whether the resulting
-	// ball movement was actually beneficial.
+	// These retain the user's original relative touch ratio:
+	//
+	//   Impact       : Speed change : Height
+	//        5       :     1.5      :   1
+	//
+	// The three normalized signals are combined into a weighted
+	// average and then scaled to a maximum reward of 5.0.
+	//
+	// Direction/goal value is intentionally NOT evaluated here.
+	// Goal/ZeroSum rewards handle whether the resulting play was
+	// actually beneficial.
 	// ============================================================
 
 	class TouchQualityReward : public Reward {
@@ -69,114 +74,106 @@ namespace RLGC {
 			if (!player.ballTouchedStep)
 				return 0.0f;
 
+			// --------------------------------------------------------
+			// 1. Impact quality
+			// --------------------------------------------------------
+			// Measures the magnitude of the ball velocity-vector change.
+			// This captures strong redirects as well as hard touches.
 			Vec deltaVelocity =
 				state.ball.vel - previousBallVelocity;
 
-			float deltaVelocityMagnitude =
-				deltaVelocity.Length();
+			float impact =
+				deltaVelocity.Length()
+				/ CommonValues::CAR_MAX_SPEED;
 
-			float quality =
-				deltaVelocityMagnitude / CommonValues::CAR_MAX_SPEED;
-
-			// Keep the quality signal bounded to [0, 1].
-			return RS_MAX(
+			impact = RS_MAX(
 				0.0f,
-				RS_MIN(quality, 1.0f)
+				RS_MIN(impact, 1.0f)
 			);
-		}
-
-		virtual void Reset(const GameState& state) override {
-			previousBallVelocity = state.ball.vel;
-		}
-
-		virtual void PreStep(const GameState& state) override {
-			previousBallVelocity = state.ball.vel;
-		}
-
-	private:
-		Vec previousBallVelocity = Vec(0, 0, 0);
-	};
 
 
-	// ============================================================
-	// Touch Acceleration Reward
-	// ============================================================
-	//
-	// Kept as the second signal in the original 5 : 1.5 : 1
-	// touch-ratio stack. This remains available independently from
-	// the main TouchQuality signal so the existing weighting is
-	// preserved exactly.
-	// ============================================================
+			// --------------------------------------------------------
+			// 2. Ball-speed-change quality
+			// --------------------------------------------------------
+			// Distinct from vector impact: this measures the change in
+			// scalar ball speed rather than the change in direction.
+			float previousSpeed =
+				previousBallVelocity.Length();
 
-	class TouchAccelerationReward : public Reward {
-	public:
-		virtual float GetReward(
-			const Player& player,
-			const GameState& state,
-			bool isFinal
-		) override {
-			if (!player.ballTouchedStep)
-				return 0.0f;
+			float currentSpeed =
+				state.ball.vel.Length();
 
-			Vec deltaVelocity =
-				state.ball.vel - previousBallVelocity;
+			float speedChange =
+				std::fabs(currentSpeed - previousSpeed)
+				/ CommonValues::CAR_MAX_SPEED;
 
-			float deltaSpeed =
-				deltaVelocity.Length();
-
-			float reward =
-				deltaSpeed / CommonValues::CAR_MAX_SPEED;
-
-			return RS_MIN(reward, 1.0f);
-		}
-
-		virtual void Reset(const GameState& state) override {
-			previousBallVelocity = state.ball.vel;
-		}
-
-		virtual void PreStep(const GameState& state) override {
-			previousBallVelocity = state.ball.vel;
-		}
-
-	private:
-		Vec previousBallVelocity = Vec(0, 0, 0);
-	};
+			speedChange = RS_MAX(
+				0.0f,
+				RS_MIN(speedChange, 1.0f)
+			);
 
 
-	// ============================================================
-	// Touch Height Reward
-	// ============================================================
-
-	class TouchHeightReward : public Reward {
-	public:
-		virtual float GetReward(
-			const Player& player,
-			const GameState& state,
-			bool isFinal
-		) override {
-			if (!player.ballTouchedStep)
-				return 0.0f;
-
+			// --------------------------------------------------------
+			// 3. Height quality
+			// --------------------------------------------------------
+			// Low/ground touches receive no height component. Above the
+			// dribble threshold, quality rises quadratically toward the
+			// ceiling. This remains only one part of the total quality.
 			constexpr float DRIBBLE_HEIGHT = 150.0f;
 			constexpr float CEILING_Z = CommonValues::CEILING_Z;
+
+			float heightQuality = 0.0f;
 			float ballHeight = state.ball.pos.z;
 
-			if (ballHeight <= DRIBBLE_HEIGHT)
-				return 0.0f;
+			if (ballHeight > DRIBBLE_HEIGHT) {
+				float normalizedHeight =
+					(ballHeight - DRIBBLE_HEIGHT)
+					/ (CEILING_Z - DRIBBLE_HEIGHT);
 
-			float normalized =
-				(ballHeight - DRIBBLE_HEIGHT)
-				/ (CEILING_Z - DRIBBLE_HEIGHT);
+				normalizedHeight = RS_MAX(
+					0.0f,
+					RS_MIN(normalizedHeight, 1.0f)
+				);
 
-			normalized = RS_MAX(
-				0.0f,
-				RS_MIN(normalized, 1.0f)
-			);
+				heightQuality =
+					normalizedHeight * normalizedHeight;
+			}
 
-			float heightFactor = normalized * normalized;
 
-			return 0.25f * heightFactor;
+			// --------------------------------------------------------
+			// Preserve the original 5 : 1.5 : 1 ratio
+			// --------------------------------------------------------
+			constexpr float IMPACT_WEIGHT = 5.0f;
+			constexpr float SPEED_CHANGE_WEIGHT = 1.5f;
+			constexpr float HEIGHT_WEIGHT = 1.0f;
+			constexpr float TOTAL_WEIGHT =
+				IMPACT_WEIGHT
+				+ SPEED_CHANGE_WEIGHT
+				+ HEIGHT_WEIGHT;
+
+			float quality =
+				(
+					impact * IMPACT_WEIGHT
+					+ speedChange * SPEED_CHANGE_WEIGHT
+					+ heightQuality * HEIGHT_WEIGHT
+				)
+				/ TOTAL_WEIGHT;
+
+			// Scale the normalized quality back to the original
+			// TouchBall maximum of +5.0.
+			return quality * 5.0f;
 		}
+
+		virtual void Reset(const GameState& state) override {
+			previousBallVelocity = state.ball.vel;
+		}
+
+		virtual void PreStep(const GameState& state) override {
+			previousBallVelocity = state.ball.vel;
+		}
+
+	private:
+		Vec previousBallVelocity = Vec(0, 0, 0);
 	};
 
 
