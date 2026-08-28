@@ -35,8 +35,8 @@ using namespace RLGC;  // RLGymCPP
 //
 // Rewards:
 //   VelocityBallToGoal  = 7.0
-//   GoalReward          = 25.0
-//   TouchBall           = 0.5
+//   GoalReward          = 60.0
+//   TouchBall           = 5.0
 //   TouchAcceleration   = 1.5
 //   TouchHeight         = 1.0
 //   SpeedTowardBall     = 5.0
@@ -310,7 +310,7 @@ int main(
 
             WeightedReward(
                 new GoalReward(-1.0f),
-                25.0f
+                60.0f
             ),
 
 
@@ -324,7 +324,7 @@ int main(
             // can be repeatedly obtained during ball control.
             WeightedReward(
                 new TouchBallReward(),
-                0.5f
+                5.0f
             ),
 
             // Rewards useful changes in ball velocity.
