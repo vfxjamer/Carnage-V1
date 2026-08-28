@@ -39,7 +39,73 @@ namespace RLGC {
 
 
 	// ============================================================
+	// Touch Quality Reward
+	// ============================================================
+	//
+	// Replaces the old binary TouchBallReward.
+	//
+	// A touch is no longer worth a flat 1.0. Instead, its reward is
+	// proportional to how much the touch actually changes the
+	// ball's velocity.
+	//
+	// 0.00 -> negligible touch / no meaningful ball impact
+	// 0.25 -> light touch
+	// 0.50 -> moderate touch
+	// 0.75 -> strong touch
+	// 1.00 -> maximum-quality impact
+	//
+	// Direction is intentionally NOT evaluated here. Goal/ZeroSum
+	// rewards are responsible for determining whether the resulting
+	// ball movement was actually beneficial.
+	// ============================================================
+
+	class TouchQualityReward : public Reward {
+	public:
+		virtual float GetReward(
+			const Player& player,
+			const GameState& state,
+			bool isFinal
+		) override {
+			if (!player.ballTouchedStep)
+				return 0.0f;
+
+			Vec deltaVelocity =
+				state.ball.vel - previousBallVelocity;
+
+			float deltaVelocityMagnitude =
+				deltaVelocity.Length();
+
+			float quality =
+				deltaVelocityMagnitude / CommonValues::CAR_MAX_SPEED;
+
+			// Keep the quality signal bounded to [0, 1].
+			return RS_MAX(
+				0.0f,
+				RS_MIN(quality, 1.0f)
+			);
+		}
+
+		virtual void Reset(const GameState& state) override {
+			previousBallVelocity = state.ball.vel;
+		}
+
+		virtual void PreStep(const GameState& state) override {
+			previousBallVelocity = state.ball.vel;
+		}
+
+	private:
+		Vec previousBallVelocity = Vec(0, 0, 0);
+	};
+
+
+	// ============================================================
 	// Touch Acceleration Reward
+	// ============================================================
+	//
+	// Kept as the second signal in the original 5 : 1.5 : 1
+	// touch-ratio stack. This remains available independently from
+	// the main TouchQuality signal so the existing weighting is
+	// preserved exactly.
 	// ============================================================
 
 	class TouchAccelerationReward : public Reward {
@@ -52,9 +118,14 @@ namespace RLGC {
 			if (!player.ballTouchedStep)
 				return 0.0f;
 
-			Vec deltaVelocity = state.ball.vel - previousBallVelocity;
-			float deltaSpeed = deltaVelocity.Length();
-			float reward = deltaSpeed / CommonValues::CAR_MAX_SPEED;
+			Vec deltaVelocity =
+				state.ball.vel - previousBallVelocity;
+
+			float deltaSpeed =
+				deltaVelocity.Length();
+
+			float reward =
+				deltaSpeed / CommonValues::CAR_MAX_SPEED;
 
 			return RS_MIN(reward, 1.0f);
 		}
