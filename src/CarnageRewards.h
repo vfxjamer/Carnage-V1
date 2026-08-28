@@ -2,6 +2,7 @@
 
 #include <RLGymCPP/Rewards/CommonRewards.h>
 #include <RLGymCPP/CommonValues.h>
+#include <cmath>
 
 namespace RLGC {
 
@@ -77,8 +78,6 @@ namespace RLGC {
 			// --------------------------------------------------------
 			// 1. Impact quality
 			// --------------------------------------------------------
-			// Measures the magnitude of the ball velocity-vector change.
-			// This captures strong redirects as well as hard touches.
 			Vec deltaVelocity =
 				state.ball.vel - previousBallVelocity;
 
@@ -95,8 +94,6 @@ namespace RLGC {
 			// --------------------------------------------------------
 			// 2. Ball-speed-change quality
 			// --------------------------------------------------------
-			// Distinct from vector impact: this measures the change in
-			// scalar ball speed rather than the change in direction.
 			float previousSpeed =
 				previousBallVelocity.Length();
 
@@ -116,9 +113,6 @@ namespace RLGC {
 			// --------------------------------------------------------
 			// 3. Height quality
 			// --------------------------------------------------------
-			// Low/ground touches receive no height component. Above the
-			// dribble threshold, quality rises quadratically toward the
-			// ceiling. This remains only one part of the total quality.
 			constexpr float DRIBBLE_HEIGHT = 150.0f;
 			constexpr float CEILING_Z = CommonValues::CEILING_Z;
 
