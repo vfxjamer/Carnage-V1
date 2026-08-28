@@ -55,7 +55,7 @@ void StepCallback(
 int main(int argc, char* argv[]) {
     std::string meshesPath = "collision_meshes";
     std::string deviceStr = "cpu";
-    int numGames = 1024;
+    int numGames = 1250;
     std::string saveDir = "checkpoints";
     std::string replayPath = "serialized_replays.bin";
     float replayProbability = 0.50f;
