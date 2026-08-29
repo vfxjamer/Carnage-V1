@@ -42,27 +42,29 @@ namespace RLGC {
 	// Touch Quality Reward
 	// ============================================================
 	//
-	// Replaces the old binary TouchBallReward + separate touch
-	// acceleration/height signals with ONE continuous touch-quality
-	// signal.
+	// Continuous 0 -> 10 touch-quality scale.
 	//
-	// A touch is scored using three properties:
+	// A touch is evaluated using three independent properties:
 	//
-	//   1. Impact       - how much the ball velocity vector changed
-	//   2. Speed change - how much the ball's scalar speed changed
-	//   3. Height       - aerial/high-ball touch quality
+	//   1. Velocity change - how much the touch changed the ball's
+	//      velocity vector (impact / redirection).
+	//   2. Shot power      - how fast the ball is travelling after
+	//      the touch (strength of the resulting shot/play).
+	//   3. Height          - how high the ball reached relative to
+	//      the Rocket League ceiling.
 	//
-	// These retain the user's original relative touch ratio:
+	// The quality is a weighted average, then scaled to [0, 10].
+	// Direction toward goal is deliberately handled by
+	// VelocityBallToGoalReward instead of duplicating it here.
 	//
-	//   Impact       : Speed change : Height
-	//        5       :     1.5      :   1
+	// Weighting:
+	//   Velocity change : 35%
+	//   Shot power      : 45%
+	//   Height          : 20%
 	//
-	// The three normalized signals are combined into a weighted
-	// average and then scaled to a maximum reward of 5.0.
-	//
-	// Direction/goal value is intentionally NOT evaluated here.
-	// Goal/ZeroSum rewards handle whether the resulting play was
-	// actually beneficial.
+	// This means a powerful, meaningful touch scores much higher
+	// than a weak tap, while high/aerial touches receive additional
+	// credit. A touch with no measurable impact/power/height gets 0.
 	// ============================================================
 
 	class TouchQualityReward : public Reward {
@@ -75,87 +77,78 @@ namespace RLGC {
 			if (!player.ballTouchedStep)
 				return 0.0f;
 
+			// Rocket League ball speed is capped around 6000 uu/s.
+			// Use the ball's physical speed range rather than the car's
+			// max speed so powerful shots can actually reach the top end
+			// of this reward scale.
+			constexpr float BALL_MAX_SPEED = 6000.0f;
+
 			// --------------------------------------------------------
-			// 1. Impact quality
+			// 1. Velocity-change / impact quality
 			// --------------------------------------------------------
 			Vec deltaVelocity =
 				state.ball.vel - previousBallVelocity;
 
-			float impact =
-				deltaVelocity.Length()
-				/ CommonValues::CAR_MAX_SPEED;
+			float velocityChange =
+				deltaVelocity.Length() / BALL_MAX_SPEED;
 
-			impact = RS_MAX(
+			velocityChange = RS_MAX(
 				0.0f,
-				RS_MIN(impact, 1.0f)
+				RS_MIN(velocityChange, 1.0f)
 			);
 
 
 			// --------------------------------------------------------
-			// 2. Ball-speed-change quality
+			// 2. Shot power
 			// --------------------------------------------------------
-			float previousSpeed =
-				previousBallVelocity.Length();
+			// Measures the resulting ball speed after the touch.
+			float shotPower =
+				state.ball.vel.Length() / BALL_MAX_SPEED;
 
-			float currentSpeed =
-				state.ball.vel.Length();
-
-			float speedChange =
-				std::fabs(currentSpeed - previousSpeed)
-				/ CommonValues::CAR_MAX_SPEED;
-
-			speedChange = RS_MAX(
+			shotPower = RS_MAX(
 				0.0f,
-				RS_MIN(speedChange, 1.0f)
+				RS_MIN(shotPower, 1.0f)
 			);
 
 
 			// --------------------------------------------------------
 			// 3. Height quality
 			// --------------------------------------------------------
-			constexpr float DRIBBLE_HEIGHT = 150.0f;
+			// Normalize the ball's height against the playable ceiling.
+			// Squaring the value makes small height changes less valuable
+			// while giving substantially more credit to genuinely high
+			// touches/aerial plays.
 			constexpr float CEILING_Z = CommonValues::CEILING_Z;
 
-			float heightQuality = 0.0f;
-			float ballHeight = state.ball.pos.z;
+			float heightQuality =
+				state.ball.pos.z / CEILING_Z;
 
-			if (ballHeight > DRIBBLE_HEIGHT) {
-				float normalizedHeight =
-					(ballHeight - DRIBBLE_HEIGHT)
-					/ (CEILING_Z - DRIBBLE_HEIGHT);
+			heightQuality = RS_MAX(
+				0.0f,
+				RS_MIN(heightQuality, 1.0f)
+			);
 
-				normalizedHeight = RS_MAX(
-					0.0f,
-					RS_MIN(normalizedHeight, 1.0f)
-				);
-
-				heightQuality =
-					normalizedHeight * normalizedHeight;
-			}
+			heightQuality *= heightQuality;
 
 
 			// --------------------------------------------------------
-			// Preserve the original 5 : 1.5 : 1 ratio
+			// Combine into a 0 -> 10 score
 			// --------------------------------------------------------
-			constexpr float IMPACT_WEIGHT = 5.0f;
-			constexpr float SPEED_CHANGE_WEIGHT = 1.5f;
-			constexpr float HEIGHT_WEIGHT = 1.0f;
-			constexpr float TOTAL_WEIGHT =
-				IMPACT_WEIGHT
-				+ SPEED_CHANGE_WEIGHT
-				+ HEIGHT_WEIGHT;
+			constexpr float VELOCITY_CHANGE_WEIGHT = 0.35f;
+			constexpr float SHOT_POWER_WEIGHT = 0.45f;
+			constexpr float HEIGHT_WEIGHT = 0.20f;
 
 			float quality =
-				(
-					impact * IMPACT_WEIGHT
-					+ speedChange * SPEED_CHANGE_WEIGHT
-					+ heightQuality * HEIGHT_WEIGHT
-				)
-				/ TOTAL_WEIGHT;
+				velocityChange * VELOCITY_CHANGE_WEIGHT
+				+ shotPower * SHOT_POWER_WEIGHT
+				+ heightQuality * HEIGHT_WEIGHT;
 
-			// Scale the normalized quality back to the original
-			// TouchBall maximum of +5.0.
-			return quality * 5.0f;
+			quality = RS_MAX(
+				0.0f,
+				RS_MIN(quality, 1.0f)
+			);
+
+			return quality * 10.0f;
 		}
 
 		virtual void Reset(const GameState& state) override {
