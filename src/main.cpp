@@ -16,7 +16,7 @@ using namespace GGL;
 using namespace RLGC;
 
 // Carnage v1 - Phase 2 (Learning to Score)
-// Gamma: 0.993
+// Gamma: 0.99
 
 void StepCallback(
     Learner* learner,
@@ -147,7 +147,7 @@ int main(int argc, char* argv[]) {
     cfg.ppo.epochs = 3;
 
     cfg.ppo.entropyScale = 0.05f;
-    cfg.ppo.gaeGamma = 0.993;
+    cfg.ppo.gaeGamma = 0.99;
     cfg.ppo.gaeLambda = 0.95;
 
     cfg.ppo.policyLR = 2e-4;
