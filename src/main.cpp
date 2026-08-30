@@ -95,14 +95,14 @@ int main(int argc, char* argv[]) {
 
     auto EnvCreateFunc = [replayPath, replayProbability](int index) -> EnvCreateResult {
         std::vector<WeightedReward> rewards = {
-            WeightedReward(new VelocityBallToGoalReward(), 7.0f),
+            WeightedReward(new VelocityBallToGoalReward(), 10.0f),
             // GoalReward is zero-sum: +1 when our team scores, -1 when the opponent scores.
             WeightedReward(new GoalReward(-1.0f), 70.0f),
-            WeightedReward(new TouchQualityReward(), 1.0f),
+            WeightedReward(new TouchQualityReward(), 2.0f),
             WeightedReward(new SpeedTowardBallReward(), 5.0f),
             WeightedReward(new FaceBallReward(), 1.5f),
             WeightedReward(new AirReward(), 0.16f),
-            WeightedReward(new PickupBoostReward(), 0.7f),
+            WeightedReward(new PickupBoostReward(), 0.12f),
             WeightedReward(new TotalEnergyReward(), 1.0f)
         };
 
