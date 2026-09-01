@@ -188,10 +188,14 @@ def run_with_sync(handle: str, checkpoint_root: Path, command: list[str]) -> int
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=("restore", "run"))
-    parser.add_argument("--handle", required=True)
-    parser.add_argument("--checkpoint-root", type=Path, required=True)
-    parser.add_argument("command", nargs=argparse.REMAINDER)
+    modes = parser.add_subparsers(dest="mode", required=True)
+    restore_parser = modes.add_parser("restore")
+    restore_parser.add_argument("--handle", required=True)
+    restore_parser.add_argument("--checkpoint-root", type=Path, required=True)
+    run_parser = modes.add_parser("run")
+    run_parser.add_argument("--handle", required=True)
+    run_parser.add_argument("--checkpoint-root", type=Path, required=True)
+    run_parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     if arguments.mode == "restore":
         restore(arguments.handle, arguments.checkpoint_root)
