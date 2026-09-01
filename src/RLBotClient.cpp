@@ -1,4 +1,5 @@
 #include "RLBotClient.h"
+#include "CarnageTraining.h"
 
 #include <rlbot/platform.h>
 #include <rlbot/botmanager.h>
@@ -109,7 +110,7 @@ rlbot::Controller RLBotBot::GetOutput(rlbot::GameTickPacket gameTickPacket) {
 		action = params.inferUnit->InferAction(localPlayer, gs, true);
 	}
 
-	if (ticks >= (params.actionDelay - 1) || ticks == -1) {
+	if (Carnage::ShouldApplyDelayedAction(ticks, params.actionDelay)) {
 		// Apply new action
 		controls = action;
 	}

@@ -7,7 +7,13 @@
 
 using namespace torch;
 
-GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _config, Device _device) : config(_config), device(_device) {
+GGL::PPOLearner::PPOLearner(
+	int obsSize,
+	int numActions,
+	PPOLearnerConfig _config,
+	Device _policyDevice,
+	Device _criticDevice
+) : config(_config), device(_policyDevice), policyDevice(_policyDevice), criticDevice(_criticDevice) {
 
 	if (config.miniBatchSize == 0)
 		config.miniBatchSize = config.batchSize;
@@ -15,7 +21,10 @@ GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _confi
 	if (config.batchSize % config.miniBatchSize != 0)
 		RG_ERR_CLOSE("PPOLearner: config.batchSize (" << config.batchSize << ") must be a multiple of config.miniBatchSize (" << config.miniBatchSize << ")");
 
-	MakeModels(true, obsSize, numActions, config.sharedHead, config.policy, config.critic, device, models);
+	if (config.sharedHead.IsValid() && policyDevice != criticDevice)
+		RG_ERR_CLOSE("PPOLearner: split actor/critic devices require sharedHead to be disabled");
+
+	MakeModels(true, obsSize, numActions, config.sharedHead, config.policy, config.critic, policyDevice, criticDevice, models);
 
 	SetLearningRates(config.policyLR, config.criticLR);
 
@@ -31,7 +40,7 @@ GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _confi
 
 	if (config.useGuidingPolicy) {
 		RG_LOG("Guiding policy enabled, loading from " << config.guidingPolicyPath << "...");
-		MakeModels(false, obsSize, numActions, config.sharedHead, config.policy, config.critic, device, guidingPolicyModels);
+		MakeModels(false, obsSize, numActions, config.sharedHead, config.policy, config.critic, policyDevice, policyDevice, guidingPolicyModels);
 		guidingPolicyModels.Load(config.guidingPolicyPath, false, false);
 	}
 }
@@ -40,7 +49,8 @@ void GGL::PPOLearner::MakeModels(
 	bool makeCritic,
 	int obsSize, int numActions, 
 	PartialModelConfig sharedHeadConfig, PartialModelConfig policyConfig, PartialModelConfig criticConfig,
-	torch::Device device, 
+	torch::Device policyDevice,
+	torch::Device criticDevice,
 	ModelSet& outModels) {
 
 	ModelConfig fullPolicyConfig = policyConfig;
@@ -62,13 +72,13 @@ void GGL::PPOLearner::MakeModels(
 		fullPolicyConfig.numInputs = fullSharedHeadConfig.layerSizes.back();
 		fullCriticConfig.numInputs = fullSharedHeadConfig.layerSizes.back();
 
-		outModels.Add(new Model("shared_head", fullSharedHeadConfig, device));
+		outModels.Add(new Model("shared_head", fullSharedHeadConfig, policyDevice));
 	}
 
-	outModels.Add(new Model("policy", fullPolicyConfig, device));
+	outModels.Add(new Model("policy", fullPolicyConfig, policyDevice));
 
 	if (makeCritic)
-		outModels.Add(new Model("critic", fullCriticConfig, device));
+		outModels.Add(new Model("critic", fullCriticConfig, criticDevice));
 }
 
 torch::Tensor GGL::PPOLearner::InferPolicyProbsFromModels(
@@ -125,9 +135,12 @@ torch::Tensor GGL::PPOLearner::InferCritic(torch::Tensor obs) {
 	return models["critic"]->Forward(obs, config.useHalfPrecision).flatten();
 }
 
+torch::Tensor ComputeRawEntropy(torch::Tensor probs) {
+	return -(probs.log() * probs).sum(-1);
+}
+
 torch::Tensor ComputeEntropy(torch::Tensor probs, torch::Tensor actionMasks, bool maskEntropy) {
-	// Compute log probs and entropy
-	auto entropy = -(probs.log() * probs).sum(-1);
+	auto entropy = ComputeRawEntropy(probs);
 
 	if (maskEntropy) {
 		// Account for action masking in entropy
@@ -146,10 +159,12 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 
 	MutAvgTracker
 		avgEntropy,
+		avgRawEntropy,
 		avgDivergence,
 		avgPolicyLoss,
 		avgRelEntropyLoss,
 		avgCriticLoss,
+		avgExplainedVariance,
 		avgGuidingLoss,
 		avgRatio,
 		avgClip;
@@ -179,14 +194,13 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 
 				float batchSizeRatio = (stop - start) / (float)config.batchSize;
 
-				// Send everything to the device and enforce correct shapes
-				auto acts = batchActs.slice(0, start, stop).to(device, true, true);
-				auto obs = batchObs.slice(0, start, stop).to(device, true, true);
-				auto actionMasks = batchActionMasks.slice(0, start, stop).to(device, true, true);
-				
-				auto advantages = batchAdvantages.slice(0, start, stop).to(device, true, true);
-				auto oldProbs = batchOldProbs.slice(0, start, stop).to(device, true, true);
-				auto targetValues = batchTargetValues.slice(0, start, stop).to(device, true, true);
+				// Policy and critic inputs are copied independently so the two models can
+				// live on separate CUDA devices without changing their independent losses.
+				auto acts = batchActs.slice(0, start, stop).to(policyDevice, true, true);
+				auto policyObs = batchObs.slice(0, start, stop).to(policyDevice, true, true);
+				auto actionMasks = batchActionMasks.slice(0, start, stop).to(policyDevice, true, true);
+				auto advantages = batchAdvantages.slice(0, start, stop).to(policyDevice, true, true);
+				auto oldProbs = batchOldProbs.slice(0, start, stop).to(policyDevice, true, true);
 
 				torch::Tensor probs, logProbs, entropy, ratio, clipped, policyLoss, ppoLoss;
 				if (trainPolicy) {
@@ -194,9 +208,10 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 					// Get policy log probs and entropy
 					float curEntropy;
 					{
-						probs = InferPolicyProbsFromModels(models, obs, actionMasks, config.policyTemperature, false);
+						probs = InferPolicyProbsFromModels(models, policyObs, actionMasks, config.policyTemperature, false);
 						logProbs = probs.log().gather(-1, acts.unsqueeze(-1));
 						entropy = ComputeEntropy(probs, actionMasks, config.maskEntropy);
+						avgRawEntropy += ComputeRawEntropy(probs).mean().detach().cpu().item<float>();
 						curEntropy = entropy.detach().cpu().item<float>();
 						avgEntropy += curEntropy;
 					}
@@ -225,7 +240,7 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 						torch::Tensor guidingProbs;
 						{
 							RG_NO_GRAD;
-							guidingProbs = InferPolicyProbsFromModels(guidingPolicyModels, obs, actionMasks, config.policyTemperature, config.useHalfPrecision);
+							guidingProbs = InferPolicyProbsFromModels(guidingPolicyModels, policyObs, actionMasks, config.policyTemperature, config.useHalfPrecision);
 						}
 
 						auto guidingLoss = (guidingProbs - probs).abs().mean();
@@ -237,12 +252,22 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 
 				torch::Tensor criticLoss;
 				if (trainCritic) {
-					auto vals = InferCritic(obs);
+					auto criticObs = batchObs.slice(0, start, stop).to(criticDevice, true, true);
+					auto targetValues = batchTargetValues.slice(0, start, stop).to(criticDevice, true, true);
+					auto vals = InferCritic(criticObs);
 
 					// Compute value loss
 					vals = vals.view_as(targetValues);
 					criticLoss = mseLoss(vals, targetValues) * batchSizeRatio;
 					avgCriticLoss += criticLoss.detach().cpu().item<float>();
+					{
+						RG_NO_GRAD;
+						auto targetVariance = targetValues.var(false);
+						if (targetVariance.item<float>() > 1e-12f) {
+							auto explained = 1 - (targetValues - vals).var(false) / targetVariance;
+						avgExplainedVariance += explained.detach().cpu().item<float>();
+						}
+					}
 				}
 
 				if (trainPolicy) {
@@ -259,19 +284,16 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 					}
 				}
 
-				if (trainPolicy && trainCritic) {
-					auto combinedLoss = ppoLoss + criticLoss;
-					combinedLoss.backward();
-				} else {
-					if (trainPolicy)
-						ppoLoss.backward();
-					if (trainCritic)
-						criticLoss.backward();
-				}
+				// The policy and critic have no shared parameters. Separate backwards are
+				// mathematically equivalent and permit an actor/critic device split.
+				if (trainPolicy)
+					ppoLoss.backward();
+				if (trainCritic)
+					criticLoss.backward();
 			};
 
 			
-			if (device.is_cpu()) {
+			if (policyDevice.is_cpu() && criticDevice.is_cpu()) {
 				// Just run one minibatch
 				fnRunMinibatch(0, config.batchSize);
 			} else {
@@ -303,6 +325,12 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 
 	// Assemble and return report
 	report["Policy Entropy"] = avgEntropy.Get();
+	report["entropy/normalized"] = avgEntropy.Get();
+	report["entropy/raw"] = avgRawEntropy.Get();
+	report["entropy/configured_runtime_coef"] = config.entropyScale;
+	report["entropy/guide_equivalent_coef"] = config.maskEntropy
+		? 0.0
+		: config.entropyScale / logf(static_cast<float>(models["policy"]->config.numOutputs));
 	report["Mean KL Divergence"] = avgDivergence.Get();
 	if (!isFirstIteration) {
 		// These metrics give bad data on the first iteration, which will mess up graph scaling
@@ -310,6 +338,7 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 		report["Policy Loss"] = avgPolicyLoss.Get();
 		report["Policy Relative Entropy Loss"] = avgRelEntropyLoss.Get();
 		report["Critic Loss"] = avgCriticLoss.Get();
+		report["critic/explained_variance"] = avgExplainedVariance.Get();
 
 		if (config.useGuidingPolicy)
 			report["Guiding Loss"] = avgGuidingLoss.Get();
@@ -384,7 +413,7 @@ void GGL::PPOLearner::LoadFrom(std::filesystem::path folderPath)  {
 	if (!std::filesystem::is_directory(folderPath))
 		RG_ERR_CLOSE("PPOLearner:LoadFrom(): Path " << folderPath << " is not a valid directory");
 
-	models.Load(folderPath, true, true);
+	models.Load(folderPath, false, true);
 
 	SetLearningRates(config.policyLR, config.criticLR);
 }

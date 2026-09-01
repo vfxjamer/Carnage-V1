@@ -55,7 +55,31 @@ endif()
 # links the Torch libraries and the pip wheel may not export Torch::Torch as an
 # imported target on all Linux/Colab configurations.
 target_link_libraries(Carnage PRIVATE GigaLearnCPP RLBotCPP)
-target_include_directories(Carnage PRIVATE "src")
+target_include_directories(Carnage PRIVATE
+    "src"
+)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(CarnageTrainingTests
+        tests/CarnageTrainingTests.cpp
+        src/CarnageTraining.cpp
+    )
+    target_include_directories(CarnageTrainingTests PRIVATE
+        "src"
+        "thirdparty/GigaLearnCPP-Leak/GigaLearnCPP/libsrc/json"
+    )
+    add_test(NAME CarnageTrainingTests COMMAND CarnageTrainingTests)
+
+    if(TORCH_CUDA_LIBRARIES)
+        add_executable(CarnageCudaSplitTests tests/CarnageCudaSplitTests.cpp)
+        target_include_directories(CarnageCudaSplitTests PRIVATE
+            "thirdparty/GigaLearnCPP-Leak/GigaLearnCPP/src"
+        )
+        target_link_libraries(CarnageCudaSplitTests PRIVATE GigaLearnCPP "${TORCH_LIBRARIES}")
+        add_test(NAME CarnageCudaSplitTests COMMAND CarnageCudaSplitTests)
+    endif()
+endif()
 
 add_custom_command(TARGET Carnage POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

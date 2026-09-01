@@ -29,6 +29,10 @@ namespace GGL {
 		//	e.g. a checkpoint at 20,000 steps will save to a subfolder called "20000"
 		// Set empty to disable saving
 		std::filesystem::path checkpointFolder = "checkpoints"; 
+		std::filesystem::path checkpointLoadFolder = {};
+		bool autoLoadLatestCheckpoint = true;
+		bool autoSaveCheckpoints = true;
+		bool enableQuitKey = true;
 
 		// Save every timestep
 		// Set to zero to just use timestepsPerIteration
@@ -37,6 +41,9 @@ namespace GGL {
 		int64_t randomSeed = -1; // Set to -1 to use the current time
 		int checkpointsToKeep = 8; // Checkpoint storage limit before old checkpoints are deleted, set to -1 to disable
 		LearnerDeviceType deviceType = LearnerDeviceType::AUTO; // Auto will use your CUDA GPU if available
+		int policyCudaDevice = 0;
+		int criticCudaDevice = 0;
+		bool splitActorCriticDevices = false;
 
 		// Standardize the obs values (doesn't seem to help much from my testing)
 		bool standardizeObs = false;

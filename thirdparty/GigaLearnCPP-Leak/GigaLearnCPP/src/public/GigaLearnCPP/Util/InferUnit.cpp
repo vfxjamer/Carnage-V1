@@ -16,6 +16,7 @@ GGL::InferUnit::InferUnit(
 			false, obsSize, actionParser->GetActionAmount(),
 			sharedHeadConfig, policyConfig, {},
 			useGPU ? torch::kCUDA : torch::kCPU,
+			useGPU ? torch::kCUDA : torch::kCPU,
 			*this->models
 		);
 	} catch (std::exception& e) {

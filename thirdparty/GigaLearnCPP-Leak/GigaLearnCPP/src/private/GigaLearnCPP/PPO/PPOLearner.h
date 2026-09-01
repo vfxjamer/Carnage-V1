@@ -1,5 +1,5 @@
 #pragma once
-#include "ExperienceBuffer.h";
+#include "ExperienceBuffer.h"
 #include <GigaLearnCPP/Util/Report.h>
 #include <GigaLearnCPP/Util/Timer.h>
 #include <GigaLearnCPP/PPO/PPOLearnerConfig.h>
@@ -23,17 +23,20 @@ namespace GGL {
 
 		PPOLearnerConfig config;
 		torch::Device device;
+		torch::Device policyDevice;
+		torch::Device criticDevice;
 
 		PPOLearner(
 			int obsSize, int numActions,
-			PPOLearnerConfig config, torch::Device device
+			PPOLearnerConfig config, torch::Device policyDevice, torch::Device criticDevice
 		);
 
 		static void MakeModels(
 			bool makeCritic, 
 			int obsSize, int numActions, 
 			PartialModelConfig sharedHeadConfig, PartialModelConfig policyConfig, PartialModelConfig criticConfig,
-			torch::Device device,
+			torch::Device policyDevice,
+			torch::Device criticDevice,
 			ModelSet& outModels
 		);
 		

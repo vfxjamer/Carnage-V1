@@ -20,8 +20,12 @@
 
 using namespace RLGC;
 
-GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbackFn stepCallback) :
-	envCreateFn(envCreateFn), config(config), stepCallback(stepCallback)
+GGL::Learner::Learner(
+	EnvCreateFn envCreateFn,
+	LearnerConfig config,
+	StepCallbackFn stepCallback,
+	IterationCallbackFn iterationCallback
+) : envCreateFn(envCreateFn), config(config), stepCallback(stepCallback), iterationCallback(iterationCallback)
 {
 	pybind11::initialize_interpreter();
 
@@ -44,20 +48,31 @@ GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbac
 
 	torch::manual_seed(config.randomSeed);
 
-	at::Device device = at::Device(at::kCPU);
+	at::Device policyDevice = at::Device(at::kCPU);
+	at::Device criticDevice = at::Device(at::kCPU);
 	if (
 		config.deviceType == LearnerDeviceType::GPU_CUDA || 
 		(config.deviceType == LearnerDeviceType::AUTO && torch::cuda::is_available())
 		) {
-		RG_LOG("\tUsing CUDA GPU device...");
+		RG_LOG("\tUsing CUDA GPU device(s)...");
+		const int deviceCount = static_cast<int>(torch::cuda::device_count());
+		if (config.policyCudaDevice < 0 || config.policyCudaDevice >= deviceCount)
+			RG_ERR_CLOSE("Learner::Learner(): Invalid policy CUDA device " << config.policyCudaDevice);
+		if (config.splitActorCriticDevices &&
+			(config.criticCudaDevice < 0 || config.criticCudaDevice >= deviceCount))
+			RG_ERR_CLOSE("Learner::Learner(): Invalid critic CUDA device " << config.criticCudaDevice);
 
 		// Test out moving a tensor to GPU and back to make sure the device is working
 		torch::Tensor t;
 		bool deviceTestFailed = false;
 		try {
 			t = torch::tensor(0);
-			t = t.to(at::Device(at::kCUDA));
+			t = t.to(at::Device(at::kCUDA, config.policyCudaDevice));
 			t = t.cpu();
+			if (config.splitActorCriticDevices) {
+				t = t.to(at::Device(at::kCUDA, config.criticCudaDevice));
+				t = t.cpu();
+			}
 		} catch (...) {
 			deviceTestFailed = true;
 		}
@@ -68,10 +83,15 @@ GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbac
 				(torch::cuda::is_available() ? "libtorch cannot access the GPU" : "CUDA is not available to libtorch") << ".\n" <<
 				"Make sure your libtorch comes with CUDA support, and that CUDA is installed properly."
 			)
-		device = at::Device(at::kCUDA);
+		policyDevice = at::Device(at::kCUDA, config.policyCudaDevice);
+		criticDevice = config.splitActorCriticDevices
+			? at::Device(at::kCUDA, config.criticCudaDevice)
+			: policyDevice;
+		RG_LOG("\tPolicy device: " << policyDevice << ", critic device: " << criticDevice);
 	} else {
 		RG_LOG("\tUsing CPU device...");
-		device = at::Device(at::kCPU);
+		policyDevice = at::Device(at::kCPU);
+		criticDevice = at::Device(at::kCPU);
 	}
 
 	if (RocketSim::GetStage() != RocketSimStage::INITIALIZED) {
@@ -108,7 +128,7 @@ GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbac
 
 	try {
 		RG_LOG("\tMaking PPO learner...");
-		ppo = new PPOLearner(obsSize, numActions, config.ppo, device);
+		ppo = new PPOLearner(obsSize, numActions, config.ppo, policyDevice, criticDevice);
 	} catch (std::exception& e) {
 		RG_ERR_CLOSE("Failed to create PPO learner: " << e.what());
 	}
@@ -133,7 +153,9 @@ GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbac
 		versionMgr = NULL;
 	}
 
-	if (!config.checkpointFolder.empty())
+	if (!config.checkpointLoadFolder.empty())
+		LoadFrom(config.checkpointLoadFolder);
+	else if (config.autoLoadLatestCheckpoint && !config.checkpointFolder.empty())
 		Load();
 
 	if (config.savePolicyVersions && !config.renderMode) {
@@ -208,6 +230,31 @@ void GGL::Learner::LoadStats(std::filesystem::path path) {
 		versionMgr->LoadRunningStatsFromJSON(j);
 }
 
+void GGL::Learner::SavePPOTo(std::filesystem::path path) {
+	ppo->SaveTo(path);
+}
+
+void GGL::Learner::ApplyPPOSettings(
+	int64_t timestepsPerIteration,
+	int64_t batchSize,
+	int64_t minibatchSize,
+	int epochs,
+	float policyLearningRate,
+	float criticLearningRate
+) {
+	if (batchSize <= 0 || minibatchSize <= 0 || batchSize % minibatchSize != 0)
+		RG_ERR_CLOSE("Learner::ApplyPPOSettings(): Batch size must be a positive multiple of minibatch size");
+	config.ppo.tsPerItr = timestepsPerIteration;
+	config.ppo.batchSize = batchSize;
+	config.ppo.miniBatchSize = minibatchSize;
+	config.ppo.epochs = epochs;
+	ppo->config.tsPerItr = timestepsPerIteration;
+	ppo->config.batchSize = batchSize;
+	ppo->config.miniBatchSize = minibatchSize;
+	ppo->config.epochs = epochs;
+	ppo->SetLearningRates(policyLearningRate, criticLearningRate);
+}
+
 // Different than RLGym-PPO to show that they are not compatible
 constexpr const char* STATS_FILE_NAME = "RUNNING_STATS.json";
 
@@ -268,6 +315,15 @@ void GGL::Learner::Load() {
 	}
 }
 
+void GGL::Learner::LoadFrom(std::filesystem::path loadFolder) {
+	if (!std::filesystem::is_directory(loadFolder))
+		RG_ERR_CLOSE("Learner::LoadFrom(): Path is not a checkpoint directory: " << loadFolder);
+	RG_LOG("Loading validated checkpoint " << loadFolder << "...");
+	LoadStats(loadFolder / STATS_FILE_NAME);
+	ppo->LoadFrom(loadFolder);
+	RG_LOG(" > Done.");
+}
+
 void GGL::Learner::StartQuitKeyThread(bool& quitPressed, std::thread& outThread) {
 	quitPressed = false;
 
@@ -326,15 +382,16 @@ void GGL::Learner::StartTransferLearn(const TransferLearnConfig& tlConfig) {
 	ModelSet oldModels = {};
 	{
 		RG_NO_GRAD;
-		PPOLearner::MakeModels(false, oldObsSize, oldNumActions, tlConfig.oldSharedHeadConfig, tlConfig.oldPolicyConfig, {}, ppo->device, oldModels);
+		PPOLearner::MakeModels(false, oldObsSize, oldNumActions, tlConfig.oldSharedHeadConfig, tlConfig.oldPolicyConfig, {}, ppo->policyDevice, ppo->policyDevice, oldModels);
 
 		oldModels.Load(tlConfig.oldModelsPath, false, false);
 	}
 
 	try {
-		bool saveQueued;
+		bool saveQueued = false;
 		std::thread keyPressThread;
-		StartQuitKeyThread(saveQueued, keyPressThread);
+		if (config.enableQuitKey)
+			StartQuitKeyThread(saveQueued, keyPressThread);
 
 		while (true) {
 			Report report = {};
@@ -426,7 +483,7 @@ void GGL::Learner::StartTransferLearn(const TransferLearnConfig& tlConfig) {
 				exit(0);
 			}
 
-			if (!config.checkpointFolder.empty()) {
+			if (config.autoSaveCheckpoints && !config.checkpointFolder.empty()) {
 				if (totalTimesteps / config.tsPerSave > prevTimesteps / config.tsPerSave) {
 					// Auto-save
 					Save();
@@ -471,9 +528,10 @@ void GGL::Learner::Start() {
 		RG_LOG("\t(Render mode enabled)");
 
 	try {
-		bool saveQueued;
+		bool saveQueued = false;
 		std::thread keyPressThread;
-		StartQuitKeyThread(saveQueued, keyPressThread);
+		if (config.enableQuitKey)
+			StartQuitKeyThread(saveQueued, keyPressThread);
 
 		ExperienceBuffer experience = ExperienceBuffer(config.randomSeed, torch::kCPU);
 
@@ -619,10 +677,10 @@ void GGL::Learner::Start() {
 						Timer inferTimer = {};
 
 						if (oldVersion) {
-							torch::Tensor tdNewStates = tStates.index_select(0, tNewPlayerIndices).to(ppo->device, true);
-							torch::Tensor tdOldStates = tStates.index_select(0, tOldPlayerIndices).to(ppo->device, true);
-							torch::Tensor tdNewActionMasks = tActionMasks.index_select(0, tNewPlayerIndices).to(ppo->device, true);
-							torch::Tensor tdOldActionMasks = tActionMasks.index_select(0, tOldPlayerIndices).to(ppo->device, true);
+							torch::Tensor tdNewStates = tStates.index_select(0, tNewPlayerIndices).to(ppo->policyDevice, true);
+							torch::Tensor tdOldStates = tStates.index_select(0, tOldPlayerIndices).to(ppo->policyDevice, true);
+							torch::Tensor tdNewActionMasks = tActionMasks.index_select(0, tNewPlayerIndices).to(ppo->policyDevice, true);
+							torch::Tensor tdOldActionMasks = tActionMasks.index_select(0, tOldPlayerIndices).to(ppo->policyDevice, true);
 
 							torch::Tensor tNewActions;
 							torch::Tensor tOldActions;
@@ -634,8 +692,8 @@ void GGL::Learner::Start() {
 							tActions.index_copy_(0, tNewPlayerIndices, tNewActions.cpu());
 							tActions.index_copy_(0, tOldPlayerIndices, tOldActions.cpu());
 						} else {
-							torch::Tensor tdStates = tStates.to(ppo->device, true);
-							torch::Tensor tdActionMasks = tActionMasks.to(ppo->device, true);
+							torch::Tensor tdStates = tStates.to(ppo->policyDevice, true);
+							torch::Tensor tdActionMasks = tActionMasks.to(ppo->policyDevice, true);
 							ppo->InferActions(tdStates, tdActionMasks, &tActions, &tLogProbs);
 							tActions = tActions.cpu();
 						}
@@ -750,11 +808,11 @@ void GGL::Learner::Start() {
 					torch::Tensor tValPreds;
 					torch::Tensor tTruncValPreds;
 
-					if (ppo->device.is_cpu()) {
+					if (ppo->criticDevice.is_cpu()) {
 						// Predict values all at once
-						tValPreds = ppo->InferCritic(tStates.to(ppo->device, true, true)).cpu();
+						tValPreds = ppo->InferCritic(tStates.to(ppo->criticDevice, true, true)).cpu();
 						if (tNextTruncStates.defined())
-							tTruncValPreds = ppo->InferCritic(tNextTruncStates.to(ppo->device, true, true)).cpu();
+							tTruncValPreds = ppo->InferCritic(tNextTruncStates.to(ppo->criticDevice, true, true)).cpu();
 					} else {
 						// Predict values using minibatching
 						tValPreds = torch::zeros({ (int64_t)combinedTraj.Length() });
@@ -763,7 +821,7 @@ void GGL::Learner::Start() {
 							int end = RS_MIN(i + ppo->config.miniBatchSize, combinedTraj.Length());
 							torch::Tensor tStatesPart = tStates.slice(0, start, end);
 
-							auto valPredsPart = ppo->InferCritic(tStatesPart.to(ppo->device, true, true)).cpu();
+							auto valPredsPart = ppo->InferCritic(tStatesPart.to(ppo->criticDevice, true, true)).cpu();
 							RG_ASSERT(valPredsPart.size(0) == (end - start));
 							tValPreds.slice(0, start, end).copy_(valPredsPart, true);
 						}
@@ -773,7 +831,7 @@ void GGL::Learner::Start() {
 							// If this is ever actually a real problem in a legitimate use case, ping Zealan in the dead of night
 							RG_ASSERT(tNextTruncStates.size(0) <= ppo->config.miniBatchSize);
 
-							tTruncValPreds = ppo->InferCritic(tNextTruncStates.to(ppo->device, true, true)).cpu();
+							tTruncValPreds = ppo->InferCritic(tNextTruncStates.to(ppo->criticDevice, true, true)).cpu();
 						}
 					}
 
@@ -815,7 +873,7 @@ void GGL::Learner::Start() {
 
 				// Free CUDA cache
 #ifdef RG_CUDA_SUPPORT
-				if (ppo->device.is_cuda())
+				if (ppo->policyDevice.is_cuda() || ppo->criticDevice.is_cuda())
 					c10::cuda::CUDACachingAllocator::emptyCache();
 #endif
 
@@ -841,13 +899,15 @@ void GGL::Learner::Start() {
 				if (versionMgr)
 					versionMgr->OnIteration(ppo, report, totalTimesteps, prevTimesteps);
 
+				bool stopAfterIteration = iterationCallback && iterationCallback(this, report);
+
 				if (saveQueued) {
 					if (!config.checkpointFolder.empty())
 						Save();
-					exit(0);
+					stopAfterIteration = true;
 				}
 
-				if (!config.checkpointFolder.empty()) {
+				if (config.autoSaveCheckpoints && !config.checkpointFolder.empty()) {
 					if (totalTimesteps / config.tsPerSave > prevTimesteps / config.tsPerSave) {
 						// Auto-save
 						Save();
@@ -886,6 +946,9 @@ void GGL::Learner::Start() {
 						"Total Iterations"
 					}
 				);
+
+				if (stopAfterIteration)
+					return;
 			}
 		}
 		
