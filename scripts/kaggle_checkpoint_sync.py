@@ -19,7 +19,7 @@ import time
 import kagglehub
 
 REQUIRED_CHECKPOINT_FILES = {
-    "POLICY.lt", "CRITIC.lt", "POLICY_OPTIM.lt", "CRITIC_OPTIM.lt",
+    "POLICY.LT", "CRITIC.LT", "POLICY_OPTIM.LT", "CRITIC_OPTIM.LT",
     "RUNNING_STATS.json", "CARNAGE_METADATA.json",
 }
 
@@ -36,7 +36,7 @@ def checkpoint_is_valid(path: Path) -> bool:
         if not isinstance(files, dict):
             return False
         def matches_metadata(name: str) -> bool:
-            metadata_name = name.upper() if name.endswith(".lt") else name
+            metadata_name = name.upper() if name.endswith(".LT") else name
             record = files.get(metadata_name)
             return isinstance(record, dict) and record.get("size") == (path / name).stat().st_size
         return all(matches_metadata(name) for name in REQUIRED_CHECKPOINT_FILES - {"CARNAGE_METADATA.json"})
