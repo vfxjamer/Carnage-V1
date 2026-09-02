@@ -19,26 +19,30 @@ import time
 import kagglehub
 
 REQUIRED_CHECKPOINT_FILES = {
-    "POLICY.LT", "CRITIC.LT", "POLICY_OPTIM.LT", "CRITIC_OPTIM.LT",
+    "POLICY.lt", "CRITIC.lt", "POLICY_OPTIM.lt", "CRITIC_OPTIM.lt",
     "RUNNING_STATS.json", "CARNAGE_METADATA.json",
 }
 
 
 def checkpoint_is_valid(path: Path) -> bool:
     """Mirror the inexpensive portion of the trainer's checkpoint admission check."""
-    if not path.is_dir() or not REQUIRED_CHECKPOINT_FILES.issubset({item.name for item in path.iterdir()}):
+    if not path.is_dir():
+        return False
+    actual_names = {item.name.casefold(): item.name for item in path.iterdir()}
+    if any(name.casefold() not in actual_names for name in REQUIRED_CHECKPOINT_FILES):
         return False
     try:
-        metadata = json.loads((path / "CARNAGE_METADATA.json").read_text(encoding="utf-8"))
+        metadata_path = path / actual_names["CARNAGE_METADATA.json".casefold()]
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         if metadata.get("metadata_schema_version") != 1 or not isinstance(metadata.get("compatibility"), dict):
             return False
         files = metadata.get("files")
         if not isinstance(files, dict):
             return False
         def matches_metadata(name: str) -> bool:
-            metadata_name = name.upper() if name.endswith(".LT") else name
-            record = files.get(metadata_name)
-            return isinstance(record, dict) and record.get("size") == (path / name).stat().st_size
+            actual_name = actual_names[name.casefold()]
+            record = next((value for key, value in files.items() if key.casefold() == name.casefold()), None)
+            return isinstance(record, dict) and record.get("size") == (path / actual_name).stat().st_size
         return all(matches_metadata(name) for name in REQUIRED_CHECKPOINT_FILES - {"CARNAGE_METADATA.json"})
     except (OSError, ValueError, TypeError):
         return False

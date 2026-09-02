@@ -30,10 +30,10 @@ constexpr std::array<std::uint64_t, 4> PERMANENT_MILESTONES = {
 };
 
 constexpr std::array<const char*, 5> REQUIRED_FILES = {
-    "POLICY.LT",
-    "POLICY_OPTIM.LT",
-    "CRITIC.LT",
-    "CRITIC_OPTIM.LT",
+    "POLICY.lt",
+    "POLICY_OPTIM.lt",
+    "CRITIC.lt",
+    "CRITIC_OPTIM.lt",
     "RUNNING_STATS.json"
 };
 

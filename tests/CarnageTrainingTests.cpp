@@ -33,7 +33,7 @@ void CheckThrows(Fn&& function, const char* message) {
 }
 
 void WriteDummyState(const std::filesystem::path& path, std::uint64_t timesteps) {
-    for (const char* name : {"POLICY.LT", "POLICY_OPTIM.LT", "CRITIC.LT", "CRITIC_OPTIM.LT"}) {
+    for (const char* name : {"POLICY.lt", "POLICY_OPTIM.lt", "CRITIC.lt", "CRITIC_OPTIM.lt"}) {
         std::ofstream output(path / name, std::ios::binary);
         output << name << "-dummy-state";
     }
@@ -145,7 +145,7 @@ void TestCheckpointValidation() {
             "rotating", 10'020'000, 2, 0, state, signature, "wandb-test",
             [](const auto& path) { WriteDummyState(path, 10'020'000); }
         );
-        std::ofstream(second / "POLICY.LT", std::ios::app) << "corruption";
+    std::ofstream(second / "POLICY.lt", std::ios::app) << "corruption";
         std::vector<std::string> diagnostics;
         const auto fallback = store.FindLatestValid(signature, &diagnostics);
         Check(fallback && *fallback == first, "corrupt latest falls back to previous valid checkpoint");
